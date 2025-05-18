@@ -29,6 +29,14 @@
 #define TEXTURE_DIRT  "textures/dirt.bmp"
 #define TEXTURE_STONE "textures/stone.bmp"
 
+#pragma pack(push, 1)
+struct BlockChange {
+    int x, y, z;
+    int type; // BlockType
+};
+#pragma pack(pop)
+
+
 // --- Размер блока ---
 const float BLOCK_SIZE = 0.5f;
 
@@ -46,6 +54,10 @@ bool onGround = false;
 const float playerHeight = BLOCK_SIZE * 1.8f;
 const float playerRadius = BLOCK_SIZE * 0.3f;
 
+GLFWmonitor* g_monitor = nullptr;
+const GLFWvidmode* g_mode = nullptr;
+bool g_fullscreen = true;
+
 // --- Инвентарь ---
 enum BlockType { AIR = 0, GRASS = 1, DIRT = 2, STONE = 3 };
 BlockType inventory[] = { GRASS, DIRT, STONE };
@@ -61,6 +73,12 @@ Block world[WORLD_X][WORLD_Y][WORLD_Z];
 
 // --- Мультиплеер ---
 constexpr int MAX_PLAYERS = 4;
+glm::vec3 playerColors[MAX_PLAYERS] = {
+    glm::vec3(1.0f, 0.2f, 0.2f), // Красный (игрок 0)
+    glm::vec3(0.2f, 0.6f, 1.0f), // Синий (игрок 1)
+    glm::vec3(0.2f, 1.0f, 0.3f), // Зелёный (игрок 2)
+    glm::vec3(1.0f, 1.0f, 0.2f)  // Жёлтый (игрок 3)
+};
 struct PlayerNetState {
     float x, y, z;
     bool active;
@@ -133,6 +151,31 @@ void serverThreadFunc(unsigned short port) {
                 players[i + 1].active = true;
             }
         }
+
+        // Получаем изменения блоков от клиентов
+        for (size_t i = 0; i < clients.size(); ++i) {
+            BlockChange change;
+            while (true) {
+                int recvd = recv(clients[i], (char*)&change, sizeof(change), 0);
+                if (recvd != sizeof(change)) {
+#ifdef _WIN32
+                    if (recvd == -1 && WSAGetLastError() == WSAEWOULDBLOCK)
+                        break;
+#endif
+                    break;
+                }
+                if (change.x >= 0 && change.x < WORLD_X &&
+                    change.y >= 0 && change.y < WORLD_Y &&
+                    change.z >= 0 && change.z < WORLD_Z) {
+                    world[change.x][change.y][change.z].type = (BlockType)change.type;
+                    for (size_t j = 0; j < clients.size(); ++j) {
+                        send(clients[j], (char*)&change, sizeof(change), 0);
+                    }
+                }
+            }
+        }
+
+
         // Отправляем всем клиентам состояния всех игроков
         for (size_t i = 0; i < clients.size(); ++i) {
             std::lock_guard<std::mutex> lock(netMutex);
@@ -179,6 +222,23 @@ void clientThreadFunc(const char* ip, unsigned short port) {
         int recvd = recv(sock, (char*)players, sizeof(players), 0);
         if (recvd == sizeof(players)) {
             // ok
+        }
+        // Получаем изменения блоков
+        BlockChange change;
+        while (true) {
+            int recvd = recv(sock, (char*)&change, sizeof(change), 0);
+            if (recvd != sizeof(change)) {
+#ifdef _WIN32
+                if (recvd == -1 && WSAGetLastError() == WSAEWOULDBLOCK)
+                    break;
+#endif
+                break;
+            }
+            if (change.x >= 0 && change.x < WORLD_X &&
+                change.y >= 0 && change.y < WORLD_Y &&
+                change.z >= 0 && change.z < WORLD_Z) {
+                world[change.x][change.y][change.z].type = (BlockType)change.type;
+            }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
@@ -234,6 +294,22 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         if (key == GLFW_KEY_1) selectedBlock = 0;
         if (key == GLFW_KEY_2 && inventorySize > 1) selectedBlock = 1;
         if (key == GLFW_KEY_3 && inventorySize > 2) selectedBlock = 2;
+		if (key == GLFW_KEY_ESCAPE) {
+			glfwSetWindowShouldClose(window, true);
+		}
+        if (key == GLFW_KEY_F11) {
+            g_fullscreen = !g_fullscreen;
+            if (g_fullscreen) {
+                // Переключаемся в полноэкранный режим
+                glfwSetWindowMonitor(window, g_monitor, 0, 0, g_mode->width, g_mode->height, g_mode->refreshRate);
+            }
+            else {
+                // Переключаемся в оконный режим (например, 1280x720, по центру)
+                int xpos = (g_mode->width - 1280) / 2;
+                int ypos = (g_mode->height - 720) / 2;
+                glfwSetWindowMonitor(window, nullptr, xpos, ypos, 1280, 720, 0);
+            }
+        }
     }
 }
 
@@ -322,6 +398,8 @@ uniform int blockType;
 uniform sampler2D texGrass;
 uniform sampler2D texDirt;
 uniform sampler2D texStone;
+uniform bool isPlayer;
+uniform vec3 playerColor;
 void main() {
     float ambient = 0.25 + 0.25 * vAO;
     vec3 norm = normalize(vNormal);
@@ -331,7 +409,9 @@ void main() {
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0) * 0.25;
     float lighting = ambient + diff * 0.7 + spec;
     vec4 texColor;
-    if (blockType == 1)
+    if (isPlayer)
+        texColor = vec4(playerColor, 1.0);
+    else if (blockType == 1)
         texColor = texture(texGrass, vUV);
     else if (blockType == 2)
         texColor = texture(texDirt, vUV);
@@ -710,7 +790,11 @@ int main(int argc, char* argv[]) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    window = glfwCreateWindow(g_winWidth, g_winHeight, "Mini Minecraft Parody", NULL, NULL);
+    g_monitor = glfwGetPrimaryMonitor();
+    g_mode = glfwGetVideoMode(g_monitor);
+    g_winWidth = g_mode->width;
+    g_winHeight = g_mode->height;
+    window = glfwCreateWindow(g_winWidth, g_winHeight, "Mini Minecraft Parody", g_monitor, NULL);
     if (!window) {
         glfwTerminate();
         return -1;
@@ -860,16 +944,24 @@ int main(int argc, char* argv[]) {
         if (pick.hit) {
             if (leftPressed && !lastLeft) {
                 world[pick.x][pick.y][pick.z].type = AIR;
+                // Отправить на сервер
+                BlockChange change{ pick.x, pick.y, pick.z, AIR };
+                send(sock, (char*)&change, sizeof(change), 0);
             }
             if (rightPressed && !lastRight) {
                 int nx = pick.x + pick.faceNormal.x;
                 int ny = pick.y + pick.faceNormal.y;
                 int nz = pick.z + pick.faceNormal.z;
                 if (nx >= 0 && nx < WORLD_X && ny >= 0 && ny < WORLD_Y && nz >= 0 && nz < WORLD_Z) {
-                    if (world[nx][ny][nz].type == AIR)
+                    if (world[nx][ny][nz].type == AIR) {
                         world[nx][ny][nz].type = inventory[selectedBlock];
+                        // Отправить на сервер
+                        BlockChange change{ nx, ny, nz, inventory[selectedBlock] };
+                        send(sock, (char*)&change, sizeof(change), 0);
+                    }
                 }
             }
+
         }
         lastLeft = leftPressed;
         lastRight = rightPressed;
@@ -884,6 +976,7 @@ int main(int argc, char* argv[]) {
         glUniform3f(glGetUniformLocation(program, "lightDir"), 0.5f, 1.0f, 0.3f);
         glUniform3f(glGetUniformLocation(program, "lightColor"), 1.0f, 0.95f, 0.85f);
         glUniform3fv(glGetUniformLocation(program, "viewPos"), 1, glm::value_ptr(cameraPos + glm::vec3(0, playerHeight * 0.5f, 0)));
+        glUniform1i(glGetUniformLocation(program, "isPlayer"), 0);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texGrass);
@@ -940,18 +1033,21 @@ int main(int argc, char* argv[]) {
         // --- Рендер других игроков как прямоугольники ---
         glUseProgram(program);
         for (int i = 0; i < MAX_PLAYERS; ++i) {
-            if (i == myPlayerId) continue; // не рисуем себя
             std::lock_guard<std::mutex> lock(netMutex);
             if (!players[i].active) continue;
-            // Дополнительно: не рисуем игрока, если его позиция почти совпадает с вашей (на случай ошибок id)
-            if (glm::distance(glm::vec3(players[i].x, players[i].y, players[i].z), cameraPos) < 0.01f)
+            // Не рисуем свою модель ни при каких обстоятельствах (по индексу и по близости)
+            if (i == myPlayerId) continue;
+            if (glm::distance(glm::vec3(players[i].x, players[i].y, players[i].z), cameraPos) < BLOCK_SIZE)
                 continue;
             glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(players[i].x, players[i].y, players[i].z));
             model = glm::scale(model, glm::vec3(BLOCK_SIZE, BLOCK_SIZE * 1.8f, BLOCK_SIZE));
             glUniformMatrix4fv(glGetUniformLocation(program, "model"), 1, GL_FALSE, glm::value_ptr(model));
-            glUniform1i(glGetUniformLocation(program, "blockType"), 2); // DIRT
+            glUniform1i(glGetUniformLocation(program, "blockType"), 0); // не используется
+            glUniform1i(glGetUniformLocation(program, "isPlayer"), 1);
+            glUniform3fv(glGetUniformLocation(program, "playerColor"), 1, glm::value_ptr(playerColors[i % MAX_PLAYERS]));
             glDrawArrays(GL_TRIANGLES, 0, 36);
         }
+        glUniform1i(glGetUniformLocation(program, "isPlayer"), 0); // сбросить для рендера блоков
 
         // --- 2D Overlay ---
         drawCrosshair(crossVAO, lineProgram);
