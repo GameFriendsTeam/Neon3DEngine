@@ -1,6 +1,8 @@
 #ifdef _WIN32
 #include <winsock2.h>
+#include <windows.h>
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "winmm.lib")
 #else
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -12,6 +14,9 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <chrono>
+#include <regex>
+#include <fstream>
 
 #include <iostream>
 #include <vector>
@@ -23,8 +28,245 @@
 #include <glm.hpp>
 #include <gtc/matrix_transform.hpp>
 #include <gtc/type_ptr.hpp>
+#include <mmsystem.h>
+#include <stdlib.h>
 
-// --- Пути к текстурам ---
+static const unsigned char font8x8_basic[128][8] = {
+ { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0000 (nul)
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0001
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0002
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0003
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0004
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0005
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0006
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0007
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0008
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0009
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+000A
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+000B
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+000C
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+000D
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+000E
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+000F
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0010
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0011
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0012
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0013
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0014
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0015
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0016
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0017
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0018
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0019
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+001A
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+001B
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+001C
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+001D
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+001E
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+001F
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0020 (space)
+    { 0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00},   // U+0021 (!)
+    { 0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0022 (")
+    { 0x36, 0x36, 0x7F, 0x36, 0x7F, 0x36, 0x36, 0x00},   // U+0023 (#)
+    { 0x0C, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x0C, 0x00},   // U+0024 ($)
+    { 0x00, 0x63, 0x33, 0x18, 0x0C, 0x66, 0x63, 0x00},   // U+0025 (%)
+    { 0x1C, 0x36, 0x1C, 0x6E, 0x3B, 0x33, 0x6E, 0x00},   // U+0026 (&)
+    { 0x06, 0x06, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0027 (')
+    { 0x18, 0x0C, 0x06, 0x06, 0x06, 0x0C, 0x18, 0x00},   // U+0028 (()
+    { 0x06, 0x0C, 0x18, 0x18, 0x18, 0x0C, 0x06, 0x00},   // U+0029 ())
+    { 0x00, 0x66, 0x3C, 0xFF, 0x3C, 0x66, 0x00, 0x00},   // U+002A (*)
+    { 0x00, 0x0C, 0x0C, 0x3F, 0x0C, 0x0C, 0x00, 0x00},   // U+002B (+)
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x06},   // U+002C (,)
+    { 0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x00, 0x00},   // U+002D (-)
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x00},   // U+002E (.)
+    { 0x60, 0x30, 0x18, 0x0C, 0x06, 0x03, 0x01, 0x00},   // U+002F (/)
+    { 0x3E, 0x63, 0x73, 0x7B, 0x6F, 0x67, 0x3E, 0x00},   // U+0030 (0)
+    { 0x0C, 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x3F, 0x00},   // U+0031 (1)
+    { 0x1E, 0x33, 0x30, 0x1C, 0x06, 0x33, 0x3F, 0x00},   // U+0032 (2)
+    { 0x1E, 0x33, 0x30, 0x1C, 0x30, 0x33, 0x1E, 0x00},   // U+0033 (3)
+    { 0x38, 0x3C, 0x36, 0x33, 0x7F, 0x30, 0x78, 0x00},   // U+0034 (4)
+    { 0x3F, 0x03, 0x1F, 0x30, 0x30, 0x33, 0x1E, 0x00},   // U+0035 (5)
+    { 0x1C, 0x06, 0x03, 0x1F, 0x33, 0x33, 0x1E, 0x00},   // U+0036 (6)
+    { 0x3F, 0x33, 0x30, 0x18, 0x0C, 0x0C, 0x0C, 0x00},   // U+0037 (7)
+    { 0x1E, 0x33, 0x33, 0x1E, 0x33, 0x33, 0x1E, 0x00},   // U+0038 (8)
+    { 0x1E, 0x33, 0x33, 0x3E, 0x30, 0x18, 0x0E, 0x00},   // U+0039 (9)
+    { 0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x0C, 0x00},   // U+003A (:)
+    { 0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x0C, 0x06},   // U+003B (;)
+    { 0x18, 0x0C, 0x06, 0x03, 0x06, 0x0C, 0x18, 0x00},   // U+003C (<)
+    { 0x00, 0x00, 0x3F, 0x00, 0x00, 0x3F, 0x00, 0x00},   // U+003D (=)
+    { 0x06, 0x0C, 0x18, 0x30, 0x18, 0x0C, 0x06, 0x00},   // U+003E (>)
+    { 0x1E, 0x33, 0x30, 0x18, 0x0C, 0x00, 0x0C, 0x00},   // U+003F (?)
+    { 0x3E, 0x63, 0x7B, 0x7B, 0x7B, 0x03, 0x1E, 0x00},   // U+0040 (@)
+    { 0x0C, 0x1E, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x00},   // U+0041 (A)
+    { 0x3F, 0x66, 0x66, 0x3E, 0x66, 0x66, 0x3F, 0x00},   // U+0042 (B)
+    { 0x3C, 0x66, 0x03, 0x03, 0x03, 0x66, 0x3C, 0x00},   // U+0043 (C)
+    { 0x1F, 0x36, 0x66, 0x66, 0x66, 0x36, 0x1F, 0x00},   // U+0044 (D)
+    { 0x7F, 0x46, 0x16, 0x1E, 0x16, 0x46, 0x7F, 0x00},   // U+0045 (E)
+    { 0x7F, 0x46, 0x16, 0x1E, 0x16, 0x06, 0x0F, 0x00},   // U+0046 (F)
+    { 0x3C, 0x66, 0x03, 0x03, 0x73, 0x66, 0x7C, 0x00},   // U+0047 (G)
+    { 0x33, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x33, 0x00},   // U+0048 (H)
+    { 0x1E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00},   // U+0049 (I)
+    { 0x78, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E, 0x00},   // U+004A (J)
+    { 0x67, 0x66, 0x36, 0x1E, 0x36, 0x66, 0x67, 0x00},   // U+004B (K)
+    { 0x0F, 0x06, 0x06, 0x06, 0x46, 0x66, 0x7F, 0x00},   // U+004C (L)
+    { 0x63, 0x77, 0x7F, 0x7F, 0x6B, 0x63, 0x63, 0x00},   // U+004D (M)
+    { 0x63, 0x67, 0x6F, 0x7B, 0x73, 0x63, 0x63, 0x00},   // U+004E (N)
+    { 0x1C, 0x36, 0x63, 0x63, 0x63, 0x36, 0x1C, 0x00},   // U+004F (O)
+    { 0x3F, 0x66, 0x66, 0x3E, 0x06, 0x06, 0x0F, 0x00},   // U+0050 (P)
+    { 0x1E, 0x33, 0x33, 0x33, 0x3B, 0x1E, 0x38, 0x00},   // U+0051 (Q)
+    { 0x3F, 0x66, 0x66, 0x3E, 0x36, 0x66, 0x67, 0x00},   // U+0052 (R)
+    { 0x1E, 0x33, 0x07, 0x0E, 0x38, 0x33, 0x1E, 0x00},   // U+0053 (S)
+    { 0x3F, 0x2D, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00},   // U+0054 (T)
+    { 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x3F, 0x00},   // U+0055 (U)
+    { 0x33, 0x33, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00},   // U+0056 (V)
+    { 0x63, 0x63, 0x63, 0x6B, 0x7F, 0x77, 0x63, 0x00},   // U+0057 (W)
+    { 0x63, 0x63, 0x36, 0x1C, 0x1C, 0x36, 0x63, 0x00},   // U+0058 (X)
+    { 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x0C, 0x1E, 0x00},   // U+0059 (Y)
+    { 0x7F, 0x63, 0x31, 0x18, 0x4C, 0x66, 0x7F, 0x00},   // U+005A (Z)
+    { 0x1E, 0x06, 0x06, 0x06, 0x06, 0x06, 0x1E, 0x00},   // U+005B ([)
+    { 0x03, 0x06, 0x0C, 0x18, 0x30, 0x60, 0x40, 0x00},   // U+005C (\)
+    { 0x1E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x1E, 0x00},   // U+005D (])
+    { 0x08, 0x1C, 0x36, 0x63, 0x00, 0x00, 0x00, 0x00},   // U+005E (^)
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF},   // U+005F (_)
+    { 0x0C, 0x0C, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0060 (`)
+    { 0x00, 0x00, 0x1E, 0x30, 0x3E, 0x33, 0x6E, 0x00},   // U+0061 (a)
+    { 0x07, 0x06, 0x06, 0x3E, 0x66, 0x66, 0x3B, 0x00},   // U+0062 (b)
+    { 0x00, 0x00, 0x1E, 0x33, 0x03, 0x33, 0x1E, 0x00},   // U+0063 (c)
+    { 0x38, 0x30, 0x30, 0x3e, 0x33, 0x33, 0x6E, 0x00},   // U+0064 (d)
+    { 0x00, 0x00, 0x1E, 0x33, 0x3f, 0x03, 0x1E, 0x00},   // U+0065 (e)
+    { 0x1C, 0x36, 0x06, 0x0f, 0x06, 0x06, 0x0F, 0x00},   // U+0066 (f)
+    { 0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x1F},   // U+0067 (g)
+    { 0x07, 0x06, 0x36, 0x6E, 0x66, 0x66, 0x67, 0x00},   // U+0068 (h)
+    { 0x0C, 0x00, 0x0E, 0x0C, 0x0C, 0x0C, 0x1E, 0x00},   // U+0069 (i)
+    { 0x30, 0x00, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E},   // U+006A (j)
+    { 0x07, 0x06, 0x66, 0x36, 0x1E, 0x36, 0x67, 0x00},   // U+006B (k)
+    { 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00},   // U+006C (l)
+    { 0x00, 0x00, 0x33, 0x7F, 0x7F, 0x6B, 0x63, 0x00},   // U+006D (m)
+    { 0x00, 0x00, 0x1F, 0x33, 0x33, 0x33, 0x33, 0x00},   // U+006E (n)
+    { 0x00, 0x00, 0x1E, 0x33, 0x33, 0x33, 0x1E, 0x00},   // U+006F (o)
+    { 0x00, 0x00, 0x3B, 0x66, 0x66, 0x3E, 0x06, 0x0F},   // U+0070 (p)
+    { 0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x78},   // U+0071 (q)
+    { 0x00, 0x00, 0x3B, 0x6E, 0x66, 0x06, 0x0F, 0x00},   // U+0072 (r)
+    { 0x00, 0x00, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x00},   // U+0073 (s)
+    { 0x08, 0x0C, 0x3E, 0x0C, 0x0C, 0x2C, 0x18, 0x00},   // U+0074 (t)
+    { 0x00, 0x00, 0x33, 0x33, 0x33, 0x33, 0x6E, 0x00},   // U+0075 (u)
+    { 0x00, 0x00, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00},   // U+0076 (v)
+    { 0x00, 0x00, 0x63, 0x6B, 0x7F, 0x7F, 0x36, 0x00},   // U+0077 (w)
+    { 0x00, 0x00, 0x63, 0x36, 0x1C, 0x36, 0x63, 0x00},   // U+0078 (x)
+    { 0x00, 0x00, 0x33, 0x33, 0x33, 0x3E, 0x30, 0x1F},   // U+0079 (y)
+    { 0x00, 0x00, 0x3F, 0x19, 0x0C, 0x26, 0x3F, 0x00},   // U+007A (z)
+    { 0x38, 0x0C, 0x0C, 0x07, 0x0C, 0x0C, 0x38, 0x00},   // U+007B ({)
+    { 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x18, 0x00},   // U+007C (|)
+    { 0x07, 0x0C, 0x0C, 0x38, 0x0C, 0x0C, 0x07, 0x00},   // U+007D (})
+    { 0x6E, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+007E (~)
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}    // U+007F
+};
+
+const char* textVertexShader = R"(
+#version 330 core
+layout(location = 0) in vec2 inPos;
+layout(location = 1) in vec2 inUV;
+out vec2 uv;
+uniform vec2 screen;
+void main() {
+    gl_Position = vec4((inPos / screen) * 2.0 - 1.0, 0, 1);
+    gl_Position.y = -gl_Position.y;
+    uv = inUV;
+}
+)";
+const char* textFragmentShader = R"(
+#version 330 core
+in vec2 uv;
+out vec4 fragColor;
+uniform sampler2D fontTex;
+uniform vec3 color;
+void main() {
+    float a = texture(fontTex, uv).r;
+    fragColor = vec4(color, a);
+}
+)";
+void drawTextGL(GLuint prog, GLuint fontTex, int w, int h, float x, float y, const char* text, float scale, float r, float g, float b) {
+    std::vector<float> vbo;
+    float sx = 8.0f * scale, sy = 8.0f * scale;
+    size_t len = strlen(text);
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = text[i];
+        if (c < 32 || c > 127) continue;
+        int ch = c;
+        int cx = ch % 16, cy = ch / 16;
+        float u0 = cx / 16.0f, v0 = cy / 8.0f;
+        float u1 = (cx + 1) / 16.0f, v1 = (cy + 1) / 8.0f;
+        float xpos = x + i * sx;
+        float ypos = y;
+        float quad[] = {
+            xpos,     ypos,     u0, v0,
+            xpos + sx,  ypos,     u1, v0,
+            xpos + sx,  ypos + sy,  u1, v1,
+            xpos,     ypos + sy,  u0, v1
+        };
+        vbo.insert(vbo.end(), quad, quad + 16);
+    }
+    std::vector<unsigned> ibo;
+    for (size_t i = 0; i < len; ++i) {
+        unsigned idx = i * 4;
+        ibo.push_back(idx + 0); ibo.push_back(idx + 1); ibo.push_back(idx + 2);
+        ibo.push_back(idx + 2); ibo.push_back(idx + 3); ibo.push_back(idx + 0);
+    }
+    if (vbo.empty() || ibo.empty()) return;
+    GLuint vao, vboId, iboId;
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vboId);
+    glGenBuffers(1, &iboId);
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vboId);
+    glBufferData(GL_ARRAY_BUFFER, vbo.size() * sizeof(float), vbo.data(), GL_STREAM_DRAW);
+    glEnableVertexAttribArray(0); // pos
+    glEnableVertexAttribArray(1); // uv
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, iboId);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, ibo.size() * sizeof(unsigned), ibo.data(), GL_STREAM_DRAW);
+
+    glUseProgram(prog);
+    glUniform2f(glGetUniformLocation(prog, "screen"), (float)w, (float)h);
+    glUniform3f(glGetUniformLocation(prog, "color"), r, g, b);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fontTex);
+    glUniform1i(glGetUniformLocation(prog, "fontTex"), 0);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDrawElements(GL_TRIANGLES, (GLsizei)ibo.size(), GL_UNSIGNED_INT, 0);
+    glDisable(GL_BLEND);
+
+    glBindVertexArray(0);
+    glDeleteBuffers(1, &vboId);
+    glDeleteBuffers(1, &iboId);
+    glDeleteVertexArrays(1, &vao);
+}
+GLuint createFontTexture() {
+    unsigned char atlas[128 * 64] = { 0 };
+    for (int ch = 0; ch < 128; ++ch) {
+        int cx = ch % 16, cy = ch / 16;
+        for (int y = 0; y < 8; ++y) {
+            unsigned char row = font8x8_basic[ch][y];
+            for (int x = 0; x < 8; ++x) {
+                int px = cx * 8 + x;
+                int py = cy * 8 + y;
+                atlas[py * 128 + px] = (row & (1 << x)) ? 255 : 0;
+            }
+        }
+    }
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, 128, 64, 0, GL_RED, GL_UNSIGNED_BYTE, atlas);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    return tex;
+}
+
+// --- пїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 #define TEXTURE_GRASS "textures/grass.bmp"
 #define TEXTURE_DIRT  "textures/dirt.bmp"
 #define TEXTURE_STONE "textures/stone.bmp"
@@ -37,10 +279,10 @@ struct BlockChange {
 #pragma pack(pop)
 
 
-// --- Размер блока ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ ---
 const float BLOCK_SIZE = 0.5f;
 
-// --- Глобальные переменные ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 int g_winWidth = 1280, g_winHeight = 720;
 glm::mat4 g_projection;
 float lastX = g_winWidth / 2.0f, lastY = g_winHeight / 2.0f;
@@ -51,6 +293,7 @@ glm::vec3 cameraFront(0.0f, 0.0f, -1.0f);
 glm::vec3 cameraUp(0.0f, 1.0f, 0.0f);
 float velocityY = 0.0f;
 bool onGround = false;
+bool showDebug = false;
 const float playerHeight = BLOCK_SIZE * 1.8f;
 const float playerRadius = BLOCK_SIZE * 0.3f;
 
@@ -58,40 +301,40 @@ GLFWmonitor* g_monitor = nullptr;
 const GLFWvidmode* g_mode = nullptr;
 bool g_fullscreen = true;
 
-// --- Инвентарь ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 enum BlockType { AIR = 0, GRASS = 1, DIRT = 2, STONE = 3 };
-BlockType inventory[] = { GRASS, DIRT, STONE };
+BlockType inventory[] = { GRASS, DIRT};
 int inventorySize = sizeof(inventory) / sizeof(BlockType);
-int selectedBlock = 0;
+int selectedBlock = 3;
 
-// --- Настройки мира ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ ---
 const int WORLD_X = 32, WORLD_Y = 16, WORLD_Z = 32;
 struct Block {
     BlockType type;
 };
 Block world[WORLD_X][WORLD_Y][WORLD_Z];
 
-// --- Мультиплеер ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 constexpr int MAX_PLAYERS = 4;
 glm::vec3 playerColors[MAX_PLAYERS] = {
-    glm::vec3(1.0f, 0.2f, 0.2f), // Красный (игрок 0)
-    glm::vec3(0.2f, 0.6f, 1.0f), // Синий (игрок 1)
-    glm::vec3(0.2f, 1.0f, 0.3f), // Зелёный (игрок 2)
-    glm::vec3(1.0f, 1.0f, 0.2f)  // Жёлтый (игрок 3)
+    glm::vec3(1.0f, 0.2f, 0.2f), // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅ 0)
+    glm::vec3(0.2f, 0.6f, 1.0f), // пїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅ 1)
+    glm::vec3(0.2f, 1.0f, 0.3f), // пїЅпїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅ 2)
+    glm::vec3(1.0f, 1.0f, 0.2f)  // ЖёпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅ 3)
 };
 struct PlayerNetState {
     float x, y, z;
     bool active;
 };
 std::mutex netMutex;
-PlayerNetState players[MAX_PLAYERS]; // [0] - сервер, [1..] - клиенты
-int myPlayerId = 0; // id текущего игрока
+PlayerNetState players[MAX_PLAYERS]; // [0] - пїЅпїЅпїЅпїЅпїЅпїЅ, [1..] - пїЅпїЅпїЅпїЅпїЅпїЅпїЅ
+int myPlayerId = 0; // id пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
 std::atomic<bool> networkRunning{ false };
 SOCKET sock = 0;
 std::thread networkThread;
 bool isServer = false;
 
-// --- Сетевые функции ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 void initSockets() {
 #ifdef _WIN32
     WSADATA wsa;
@@ -112,7 +355,7 @@ void serverThreadFunc(unsigned short port) {
     bind(listenSock, (sockaddr*)&addr, sizeof(addr));
     listen(listenSock, MAX_PLAYERS - 1);
 
-    // Сделать listenSock неблокирующим
+    // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ listenSock пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 #ifdef _WIN32
     u_long mode = 1;
     ioctlsocket(listenSock, FIONBIO, &mode);
@@ -122,13 +365,13 @@ void serverThreadFunc(unsigned short port) {
 #endif
 
     std::vector<SOCKET> clients;
-    printf("Ожидание клиентов на порту %d...\n", port);
+    printf("пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅ %d...\n", port);
     networkRunning = true;
     while (networkRunning) {
-        // Принимаем новых клиентов
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
         SOCKET cs = accept(listenSock, nullptr, nullptr);
         if (cs != -1 && clients.size() < MAX_PLAYERS - 1) {
-            // Сделать cs неблокирующим
+            // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ cs пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 #ifdef _WIN32
             u_long mode = 1;
             ioctlsocket(cs, FIONBIO, &mode);
@@ -137,9 +380,9 @@ void serverThreadFunc(unsigned short port) {
             fcntl(cs, F_SETFL, flags | O_NONBLOCK);
 #endif
             clients.push_back(cs);
-            printf("Клиент подключился! id=%d\n", (int)clients.size());
+            printf("пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ! id=%d\n", (int)clients.size());
         }
-        // Получаем позиции от клиентов
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
         for (size_t i = 0; i < clients.size(); ++i) {
             float pos[3];
             int recvd = recv(clients[i], (char*)pos, sizeof(pos), 0);
@@ -152,7 +395,7 @@ void serverThreadFunc(unsigned short port) {
             }
         }
 
-        // Получаем изменения блоков от клиентов
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
         for (size_t i = 0; i < clients.size(); ++i) {
             BlockChange change;
             while (true) {
@@ -176,7 +419,7 @@ void serverThreadFunc(unsigned short port) {
         }
 
 
-        // Отправляем всем клиентам состояния всех игроков
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ
         for (size_t i = 0; i < clients.size(); ++i) {
             std::lock_guard<std::mutex> lock(netMutex);
             send(clients[i], (char*)players, sizeof(players), 0);
@@ -193,12 +436,12 @@ void clientThreadFunc(const char* ip, unsigned short port) {
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = inet_addr(ip);
     addr.sin_port = htons(port);
-    printf("Подключение к %s:%d...\n", ip, port);
+    printf("пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ %s:%d...\n", ip, port);
     if (connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        printf("Ошибка подключения!\n");
+        printf("пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ!\n");
         return;
     }
-    // Сделать sock неблокирующим
+    // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ sock пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 #ifdef _WIN32
     u_long mode = 1;
     ioctlsocket(sock, FIONBIO, &mode);
@@ -206,10 +449,10 @@ void clientThreadFunc(const char* ip, unsigned short port) {
     int flags = fcntl(sock, F_GETFL, 0);
     fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 #endif
-    printf("Подключено к серверу!\n");
+    printf("пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ!\n");
     networkRunning = true;
     while (networkRunning) {
-        // Отправляем свою позицию
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ
         float pos[3];
         {
             std::lock_guard<std::mutex> lock(netMutex);
@@ -218,12 +461,12 @@ void clientThreadFunc(const char* ip, unsigned short port) {
             pos[2] = players[0].z;
         }
         send(sock, (char*)pos, sizeof(pos), 0);
-        // Получаем состояния всех игроков
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ
         int recvd = recv(sock, (char*)players, sizeof(players), 0);
         if (recvd == sizeof(players)) {
             // ok
         }
-        // Получаем изменения блоков
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
         BlockChange change;
         while (true) {
             int recvd = recv(sock, (char*)&change, sizeof(change), 0);
@@ -246,7 +489,7 @@ void clientThreadFunc(const char* ip, unsigned short port) {
 }
 
 
-// --- Callback для изменения размера окна ---
+// --- Callback пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ ---
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     g_winWidth = width;
     g_winHeight = height;
@@ -254,7 +497,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     g_projection = glm::perspective(glm::radians(70.0f), (float)width / (float)height, 0.1f, 200.0f);
 }
 
-// --- Обработка мыши ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ ---
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     if (firstMouse) {
         lastX = (float)xpos;
@@ -282,38 +525,39 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     cameraFront = glm::normalize(front);
 }
 
-// --- Обработка колесика мыши для инвентаря ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     if (yoffset > 0) selectedBlock = (selectedBlock + 1) % inventorySize;
     if (yoffset < 0) selectedBlock = (selectedBlock - 1 + inventorySize) % inventorySize;
 }
 
-// --- Обработка клавиш 1/2/3 для выбора слота ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ 1/2/3 пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ ---
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (action == GLFW_PRESS) {
         if (key == GLFW_KEY_1) selectedBlock = 0;
         if (key == GLFW_KEY_2 && inventorySize > 1) selectedBlock = 1;
         if (key == GLFW_KEY_3 && inventorySize > 2) selectedBlock = 2;
-		if (key == GLFW_KEY_ESCAPE) {
-			glfwSetWindowShouldClose(window, true);
-		}
+        if (key == GLFW_KEY_ESCAPE) {
+            glfwSetWindowShouldClose(window, true);
+        }
         if (key == GLFW_KEY_F11) {
             g_fullscreen = !g_fullscreen;
             if (g_fullscreen) {
-                // Переключаемся в полноэкранный режим
                 glfwSetWindowMonitor(window, g_monitor, 0, 0, g_mode->width, g_mode->height, g_mode->refreshRate);
             }
             else {
-                // Переключаемся в оконный режим (например, 1280x720, по центру)
                 int xpos = (g_mode->width - 1280) / 2;
                 int ypos = (g_mode->height - 720) / 2;
                 glfwSetWindowMonitor(window, nullptr, xpos, ypos, 1280, 720, 0);
             }
         }
+        if (key == GLFW_KEY_F3) {
+            showDebug = !showDebug;
+        }
     }
 }
 
-// --- Загрузка BMP-текстуры ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ BMP-пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 GLuint loadBMP(const char* imagepath) {
     unsigned char header[54];
     unsigned int dataPos, width, height, imageSize;
@@ -321,16 +565,16 @@ GLuint loadBMP(const char* imagepath) {
 
     FILE* file = fopen(imagepath, "rb");
     if (!file) {
-        std::cerr << "Не удалось открыть BMP: " << imagepath << std::endl;
+        std::cerr << "пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ BMP: " << imagepath << std::endl;
         return 0;
     }
     if (fread(header, 1, 54, file) != 54) {
-        std::cerr << "Неверный BMP header: " << imagepath << std::endl;
+        std::cerr << "пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ BMP header: " << imagepath << std::endl;
         fclose(file);
         return 0;
     }
     if (header[0] != 'B' || header[1] != 'M') {
-        std::cerr << "Файл не BMP: " << imagepath << std::endl;
+        std::cerr << "пїЅпїЅпїЅпїЅ пїЅпїЅ BMP: " << imagepath << std::endl;
         fclose(file);
         return 0;
     }
@@ -345,7 +589,7 @@ GLuint loadBMP(const char* imagepath) {
     fread(data, 1, imageSize, file);
     fclose(file);
 
-    // BMP хранит цвета в BGR, OpenGL ожидает RGB
+    // BMP пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅ BGR, OpenGL пїЅпїЅпїЅпїЅпїЅпїЅпїЅ RGB
     for (unsigned int i = 0; i < imageSize; i += 3) {
         std::swap(data[i], data[i + 2]);
     }
@@ -362,7 +606,7 @@ GLuint loadBMP(const char* imagepath) {
     return textureID;
 }
 
-// --- Шейдеры ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 const char* vertexShaderSource = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -406,8 +650,8 @@ void main() {
     float diff = max(dot(norm, normalize(-lightDir)), 0.0);
     vec3 viewDir = normalize(viewPos - vWorldPos);
     vec3 reflectDir = reflect(lightDir, norm);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0) * 0.25;
-    float lighting = ambient + diff * 0.7 + spec;
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0) * 0.0025;
+    float lighting = ambient + diff * 0.2 + spec;
     vec4 texColor;
     if (isPlayer)
         texColor = vec4(playerColor, 1.0);
@@ -419,11 +663,11 @@ void main() {
         texColor = texture(texStone, vUV);
     else
         texColor = vec4(1,0,1,1);
-    FragColor = vec4(texColor.rgb * lighting * lightColor, texColor.a);
+    FragColor = vec4(texColor.rgb * lighting * lightColor*0.75, texColor.a);
 }
 )";
 
-// --- Шейдер для хотбара и иконок (2D) ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ (2D) ---
 const char* quadVertexShader = R"(
 #version 330 core
 layout (location = 0) in vec2 aPos;
@@ -447,7 +691,7 @@ void main() {
 }
 )";
 
-// --- Шейдер для линий (крестик и рамки хотбара) ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ) ---
 const char* lineVertexShader = R"(
 #version 330 core
 layout (location = 0) in vec2 aPos;
@@ -465,45 +709,45 @@ void main() {
 }
 )";
 
-// --- Куб (36 вершин, с uv, нормалью и AO для каждой грани) ---
+// --- пїЅпїЅпїЅ (36 пїЅпїЅпїЅпїЅпїЅпїЅ, пїЅ uv, пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ AO пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ) ---
 float cubeVertices[] = {
     // pos      // uv   // normal    // AO
-    // Перед
+    // пїЅпїЅпїЅпїЅпїЅ
     0,0,1, 0,0, 0,0,1, 0,
     1,0,1, 1,0, 0,0,1, 0,
     1,1,1, 1,1, 0,0,1, 0,
     0,0,1, 0,0, 0,0,1, 0,
     1,1,1, 1,1, 0,0,1, 0,
     0,1,1, 0,1, 0,0,1, 0,
-    // Зад
+    // пїЅпїЅпїЅ
     0,0,0, 1,0, 0,0,-1, 0,
     1,0,0, 0,0, 0,0,-1, 0,
     1,1,0, 0,1, 0,0,-1, 0,
     0,0,0, 1,0, 0,0,-1, 0,
     1,1,0, 0,1, 0,0,-1, 0,
     0,1,0, 1,1, 0,0,-1, 0,
-    // Лево
+    // пїЅпїЅпїЅпїЅ
     0,0,0, 0,0, -1,0,0, 0,
     0,0,1, 1,0, -1,0,0, 0,
     0,1,1, 1,1, -1,0,0, 0,
     0,0,0, 0,0, -1,0,0, 0,
     0,1,1, 1,1, -1,0,0, 0,
     0,1,0, 0,1, -1,0,0, 0,
-    // Право
+    // пїЅпїЅпїЅпїЅпїЅ
     1,0,0, 1,0, 1,0,0, 0,
     1,0,1, 0,0, 1,0,0, 0,
     1,1,1, 0,1, 1,0,0, 0,
     1,0,0, 1,0, 1,0,0, 0,
     1,1,1, 0,1, 1,0,0, 0,
     1,1,0, 1,1, 1,0,0, 0,
-    // Верх
+    // пїЅпїЅпїЅпїЅ
     0,1,0, 0,1, 0,1,0, 0,
     1,1,0, 1,1, 0,1,0, 0,
     1,1,1, 1,0, 0,1,0, 0,
     0,1,0, 0,1, 0,1,0, 0,
     1,1,1, 1,0, 0,1,0, 0,
     0,1,1, 0,0, 0,1,0, 0,
-    // Низ
+    // пїЅпїЅпїЅ
     0,0,0, 0,0, 0,-1,0, 0,
     1,0,0, 1,0, 0,-1,0, 0,
     1,0,1, 1,1, 0,-1,0, 0,
@@ -512,7 +756,7 @@ float cubeVertices[] = {
     0,0,1, 0,1, 0,-1,0, 0,
 };
 
-// --- Квад для хотбара/иконок ---
+// --- пїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ/пїЅпїЅпїЅпїЅпїЅпїЅ ---
 float quadVertices[] = {
     // pos   // uv
     0,0, 0,0,
@@ -523,18 +767,18 @@ float quadVertices[] = {
     0,1, 0,1
 };
 
-// --- Вершины для крестика (NDC)
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ (NDC)
 float crosshairVertices[] = {
-    0.0f, -0.03f,
-    0.0f,  0.03f,
-    -0.03f, 0.0f,
-     0.03f, 0.0f
+    0.0f, -0.02f,
+    0.0f,  0.02f,
+    -0.02f, 0.0f,
+     0.02f, 0.0f
 };
 
-// --- Вершины для рамки хотбара (4 точки, 5 для замыкания)
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ (4 пїЅпїЅпїЅпїЅпїЅ, 5 пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ)
 float hotbarFrameVertices[5 * 2];
 
-// --- Перлин 2D ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅ 2D ---
 float fade(float t) { return t * t * t * (t * (t * 6 - 15) + 10); }
 float lerp(float a, float b, float t) { return a + t * (b - a); }
 float grad(int hash, float x, float y) {
@@ -571,14 +815,14 @@ float perlin2d(float x, float y) {
     );
 }
 
-// --- Генерация мира с Перлином ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 void generateWorld() {
     initPerlin();
     for (int x = 0; x < WORLD_X; ++x)
         for (int z = 0; z < WORLD_Z; ++z) {
             float fx = x * 0.15f, fz = z * 0.15f;
             float n = perlin2d(fx, fz) * 0.5f + 0.5f;
-            int h = 6 + int(n * 7); // высота от 6 до 13
+            int h = 6 + int(n * 7); // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ 6 пїЅпїЅ 13
             for (int y = 0; y < WORLD_Y; ++y) {
                 if (y > h) world[x][y][z].type = AIR;
                 else if (y == h) world[x][y][z].type = GRASS;
@@ -588,7 +832,7 @@ void generateWorld() {
         }
 }
 
-// --- Компиляция шейдера ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
 GLuint createShader(GLenum type, const char* src) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &src, NULL);
@@ -607,7 +851,7 @@ GLuint createProgram(const char* vs, const char* fs) {
     return p;
 }
 
-// --- Проверка коллизии с блоками (AABB, с учётом радиуса и высоты) ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ (AABB, пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ) ---
 bool checkCollision(glm::vec3 pos) {
     for (float y = 0.0f; y < playerHeight; y += BLOCK_SIZE / 2.0f) {
         glm::vec3 p = pos + glm::vec3(0, y, 0);
@@ -624,7 +868,7 @@ bool checkCollision(glm::vec3 pos) {
     return false;
 }
 
-// --- Raycast для выбора блока ---
+// --- Raycast пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ ---
 struct RaycastResult {
     bool hit;
     int x, y, z;
@@ -651,21 +895,21 @@ RaycastResult raycast(glm::vec3 origin, glm::vec3 dir, float maxDist = 6.0f) {
     return { false, 0, 0, 0, glm::ivec3(0) };
 }
 
-// --- Ambient Occlusion для блока (если сверху есть блок — темнее) ---
+// --- Ambient Occlusion пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ) ---
 float getBlockAO(int x, int y, int z) {
     if (y + 1 >= WORLD_Y) return 1.0f;
     if (world[x][y + 1][z].type != AIR) return 0.3f;
     return 1.0f;
 }
 
-// --- GLFW callbacks для мышиных кликов ---
+// --- GLFW callbacks пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ ---
 bool leftPressed = false, rightPressed = false;
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     if (button == GLFW_MOUSE_BUTTON_LEFT) leftPressed = (action == GLFW_PRESS);
     if (button == GLFW_MOUSE_BUTTON_RIGHT) rightPressed = (action == GLFW_PRESS);
 }
 
-// --- Рендер крестика в центре ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ ---
 void drawCrosshair(GLuint crossVAO, GLuint lineProgram) {
     glUseProgram(lineProgram);
     glm::mat4 proj = glm::ortho(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f);
@@ -678,7 +922,7 @@ void drawCrosshair(GLuint crossVAO, GLuint lineProgram) {
     glUseProgram(0);
 }
 
-// --- Рендер хотбара (3 слота, выбранный выделен) ---
+// --- пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ (3 пїЅпїЅпїЅпїЅпїЅ, пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ) ---
 void drawHotbar(GLuint quadVAO, GLuint quadProgram, GLuint lineProgram, GLuint texGrass, GLuint texDirt, GLuint texStone) {
     float slotSize = 64.0f;
     float margin = 12.0f;
@@ -686,7 +930,7 @@ void drawHotbar(GLuint quadVAO, GLuint quadProgram, GLuint lineProgram, GLuint t
     float x0 = (g_winWidth - (slotSize * 3 + margin * 2)) / 2.0f;
     GLuint texArr[3] = { texGrass, texDirt, texStone };
 
-    // --- Иконки ---
+    // --- пїЅпїЅпїЅпїЅпїЅпїЅ ---
     glUseProgram(quadProgram);
     glm::mat4 proj = glm::ortho(0.0f, float(g_winWidth), float(g_winHeight), 0.0f, -1.0f, 1.0f);
     glUniformMatrix4fv(glGetUniformLocation(quadProgram, "proj"), 1, GL_FALSE, glm::value_ptr(proj));
@@ -705,12 +949,12 @@ void drawHotbar(GLuint quadVAO, GLuint quadProgram, GLuint lineProgram, GLuint t
     glBindVertexArray(0);
     glUseProgram(0);
 
-    // --- Рамки ---
+    // --- пїЅпїЅпїЅпїЅпїЅ ---
     glUseProgram(lineProgram);
     glUniformMatrix4fv(glGetUniformLocation(lineProgram, "proj"), 1, GL_FALSE, glm::value_ptr(proj));
     for (int i = 0; i < 3; ++i) {
         float x = x0 + i * (slotSize + margin);
-        // 4 угла + замыкающая
+        // 4 пїЅпїЅпїЅпїЅ + пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
         hotbarFrameVertices[0] = x;               hotbarFrameVertices[1] = y;
         hotbarFrameVertices[2] = x + slotSize;    hotbarFrameVertices[3] = y;
         hotbarFrameVertices[4] = x + slotSize;    hotbarFrameVertices[5] = y + slotSize;
@@ -736,50 +980,70 @@ void drawHotbar(GLuint quadVAO, GLuint quadProgram, GLuint lineProgram, GLuint t
     }
     glUseProgram(0);
 }
-
+/*void drawDebugText(float x, float y, const char* text, float r, float g, float b, float scale = 1.0f) {
+    char buffer[99999]; // ~500 chars
+    int num_quads;
+    num_quads = stb_easy_font_print(0, 0, (char*)text, NULL, buffer, sizeof(buffer));
+    glPushMatrix();
+    glLoadIdentity();
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0, g_winWidth, g_winHeight, 0, -1, 1);
+    glColor3f(r, g, b);
+    glTranslatef(x, y, 0);
+    glScalef(scale, scale, 1.0f);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 16, buffer);
+    glDrawArrays(GL_QUADS, 0, num_quads * 4);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+}*/
 int main(int argc, char* argv[]) {
     setlocale(LC_ALL, "Russian");
-    // --- Мультиплеер: выбор режима ---
+    // --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ: пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ ---
     initSockets();
-    printf("Выберите режим (1 - сервер, 2 - клиент, 3 - хост): ");
+    printf("пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ (1 - пїЅпїЅпїЅпїЅпїЅпїЅ, 2 - пїЅпїЅпїЅпїЅпїЅпїЅ, 3 - пїЅпїЅпїЅпїЅ): ");
     int mode = 0;
     std::cin >> mode;
     unsigned short port;
     char ip[64] = "127.0.0.1";
     if (mode == 1) {
-        // Только сервер (выделенный)
+        // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ)
         isServer = true;
-        myPlayerId = -1; // Сервер не участвует как игрок
-        printf("Введите порт для сервера: ");
+        myPlayerId = -1; // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ
+        printf("пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ: ");
         std::cin >> port;
         for (int i = 0; i < MAX_PLAYERS; ++i) players[i].active = false;
         networkThread = std::thread(serverThreadFunc, port);
     }
     else if (mode == 2) {
-        // Только клиент
+        // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
         isServer = false;
         myPlayerId = 0;
-        printf("Введите IP сервера: ");
+        printf("пїЅпїЅпїЅпїЅпїЅпїЅпїЅ IP пїЅпїЅпїЅпїЅпїЅпїЅпїЅ: ");
         std::cin >> ip;
-        printf("Введите порт: ");
+        printf("пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ: ");
         std::cin >> port;
         for (int i = 0; i < MAX_PLAYERS; ++i) players[i].active = false;
         players[0].active = true;
         networkThread = std::thread(clientThreadFunc, ip, port);
     }
     else if (mode == 3) {
-        // Хост: сервер + клиент
+        // пїЅпїЅпїЅпїЅ: пїЅпїЅпїЅпїЅпїЅпїЅ + пїЅпїЅпїЅпїЅпїЅпїЅ
         isServer = true;
         myPlayerId = 0;
-        printf("Введите порт для хоста: ");
+        printf("пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ: ");
         std::cin >> port;
         for (int i = 0; i < MAX_PLAYERS; ++i) players[i].active = false;
         players[0].active = true;
-        // Сначала сервер
+        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
         networkThread = std::thread(serverThreadFunc, port);
-        // Дать серверу время стартовать (иначе connect может не успеть)
+        // пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅ connect пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ)
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        // Затем клиент (localhost)
+        // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ (localhost)
         std::thread(clientThreadFunc, "127.0.0.1", port).detach();
     }
 
@@ -812,15 +1076,15 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    // --- Генерация мира ---
+    // --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ ---
     generateWorld();
 
-    // --- Загрузка текстур ---
+    // --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
     GLuint texGrass = loadBMP(TEXTURE_GRASS);
     GLuint texDirt = loadBMP(TEXTURE_DIRT);
     GLuint texStone = loadBMP(TEXTURE_STONE);
 
-    // --- Куб VAO/VBO ---
+    // --- пїЅпїЅпїЅ VAO/VBO ---
     GLuint cubeVAO, cubeVBO;
     glGenVertexArrays(1, &cubeVAO);
     glGenBuffers(1, &cubeVBO);
@@ -837,7 +1101,7 @@ int main(int argc, char* argv[]) {
     glEnableVertexAttribArray(3);
     glBindVertexArray(0);
 
-    // --- Квад для хотбара ---
+    // --- пїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
     GLuint quadVAO, quadVBO;
     glGenVertexArrays(1, &quadVAO);
     glGenBuffers(1, &quadVBO);
@@ -850,7 +1114,7 @@ int main(int argc, char* argv[]) {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    // --- VAO/VBO для крестика ---
+    // --- VAO/VBO пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
     GLuint crossVAO, crossVBO;
     glGenVertexArrays(1, &crossVAO);
     glGenBuffers(1, &crossVBO);
@@ -861,22 +1125,35 @@ int main(int argc, char* argv[]) {
     glEnableVertexAttribArray(0);
     glBindVertexArray(0);
 
-    // --- Программы ---
+    GLuint fontTex = createFontTexture();
+
+    // --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
     GLuint program = createProgram(vertexShaderSource, fragmentShaderSource);
     GLuint quadProgram = createProgram(quadVertexShader, quadFragmentShader);
     GLuint lineProgram = createProgram(lineVertexShader, lineFragmentShader);
+    GLuint textProg = createProgram(textVertexShader, textFragmentShader);
 
     glEnable(GL_DEPTH_TEST);
 
     g_projection = glm::perspective(glm::radians(70.0f), (float)g_winWidth / (float)g_winHeight, 0.1f, 200.0f);
 
     double lastTime = glfwGetTime();
+    double lastFPSTime = glfwGetTime();
+    int frameCount = 0;
+    double fps = 0.0;
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
+        frameCount++;
+        if (now - lastFPSTime >= 1.0) {
+            fps = frameCount / (now - lastFPSTime);
+            lastFPSTime = now;
+            frameCount = 0;
+        }
+        now = glfwGetTime();
         float deltaTime = float(now - lastTime);
         lastTime = now;
 
-        // --- Сохраняем свою позицию для передачи по сети ---
+        // --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅ ---
         {
             std::lock_guard<std::mutex> lock(netMutex);
             players[myPlayerId].x = cameraPos.x;
@@ -888,7 +1165,7 @@ int main(int argc, char* argv[]) {
         glClearColor(0.5f, 0.8f, 1.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // --- Управление ---
+        // --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
         float speed = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? 8.0f : 4.0f;
         glm::vec3 move(0.0f);
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) move += cameraFront;
@@ -898,14 +1175,14 @@ int main(int argc, char* argv[]) {
         move.y = 0.0f;
         if (glm::length(move) > 0.0f) move = glm::normalize(move);
 
-        // --- Гравитация и прыжок ---
+        // --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ ---
         velocityY -= 18.0f * deltaTime;
         if (onGround && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
             velocityY = 7.0f;
             onGround = false;
         }
 
-        // --- Перемещение с учётом коллизий (раздельно по осям) ---
+        // --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅ) ---
         glm::vec3 nextPos = cameraPos;
         // XZ
         glm::vec3 tryXZ = cameraPos + move * speed * deltaTime;
@@ -936,15 +1213,16 @@ int main(int argc, char* argv[]) {
             players[myPlayerId].active = true;
         }
 
-        // --- Raycast для выбора блока ---
+        // --- Raycast пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ ---
         RaycastResult pick = raycast(cameraPos + glm::vec3(0, playerHeight * 0.5f, 0), cameraFront);
 
-        // --- Ломать/ставить блоки ---
+        // --- пїЅпїЅпїЅпїЅпїЅпїЅ/пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ ---
         static bool lastLeft = false, lastRight = false;
         if (pick.hit) {
             if (leftPressed && !lastLeft) {
                 world[pick.x][pick.y][pick.z].type = AIR;
-                // Отправить на сервер
+                PlaySound(TEXT("boing_x.wav"), NULL, SND_FILENAME | SND_ASYNC);
+                // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
                 BlockChange change{ pick.x, pick.y, pick.z, AIR };
                 send(sock, (char*)&change, sizeof(change), 0);
             }
@@ -955,7 +1233,7 @@ int main(int argc, char* argv[]) {
                 if (nx >= 0 && nx < WORLD_X && ny >= 0 && ny < WORLD_Y && nz >= 0 && nz < WORLD_Z) {
                     if (world[nx][ny][nz].type == AIR) {
                         world[nx][ny][nz].type = inventory[selectedBlock];
-                        // Отправить на сервер
+                        // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
                         BlockChange change{ nx, ny, nz, inventory[selectedBlock] };
                         send(sock, (char*)&change, sizeof(change), 0);
                     }
@@ -969,7 +1247,7 @@ int main(int argc, char* argv[]) {
         // --- View/Projection ---
         glm::mat4 view = glm::lookAt(cameraPos + glm::vec3(0, playerHeight * 0.5f, 0), cameraPos + glm::vec3(0, playerHeight * 0.5f, 0) + cameraFront, cameraUp);
 
-        // --- Рендер всех блоков ---
+        // --- пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ ---
         glUseProgram(program);
         glUniformMatrix4fv(glGetUniformLocation(program, "view"), 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(glGetUniformLocation(program, "projection"), 1, GL_FALSE, glm::value_ptr(g_projection));
@@ -995,7 +1273,7 @@ int main(int argc, char* argv[]) {
                 for (int z = 0; z < WORLD_Z; ++z) {
                     BlockType t = world[x][y][z].type;
                     if (t == AIR) continue;
-                    // Не рисуем внутренние блоки
+                    // пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ
                     bool hidden = true;
                     for (int dx = -1; dx <= 1 && hidden; ++dx)
                         for (int dy = -1; dy <= 1 && hidden; ++dy)
@@ -1030,33 +1308,74 @@ int main(int argc, char* argv[]) {
                     glDrawArrays(GL_TRIANGLES, 0, 36);
                 }
 
-        // --- Рендер других игроков как прямоугольники ---
+        // --- пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
         glUseProgram(program);
         for (int i = 0; i < MAX_PLAYERS; ++i) {
             std::lock_guard<std::mutex> lock(netMutex);
             if (!players[i].active) continue;
-            // Не рисуем свою модель ни при каких обстоятельствах (по индексу и по близости)
+            // пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ (пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ)
             if (i == myPlayerId) continue;
             if (glm::distance(glm::vec3(players[i].x, players[i].y, players[i].z), cameraPos) < BLOCK_SIZE)
                 continue;
             glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(players[i].x, players[i].y, players[i].z));
             model = glm::scale(model, glm::vec3(BLOCK_SIZE, BLOCK_SIZE * 1.8f, BLOCK_SIZE));
             glUniformMatrix4fv(glGetUniformLocation(program, "model"), 1, GL_FALSE, glm::value_ptr(model));
-            glUniform1i(glGetUniformLocation(program, "blockType"), 0); // не используется
+            glUniform1i(glGetUniformLocation(program, "blockType"), 0); // пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
             glUniform1i(glGetUniformLocation(program, "isPlayer"), 1);
             glUniform3fv(glGetUniformLocation(program, "playerColor"), 1, glm::value_ptr(playerColors[i % MAX_PLAYERS]));
             glDrawArrays(GL_TRIANGLES, 0, 36);
         }
-        glUniform1i(glGetUniformLocation(program, "isPlayer"), 0); // сбросить для рендера блоков
+        glUniform1i(glGetUniformLocation(program, "isPlayer"), 0); // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
 
         // --- 2D Overlay ---
         drawCrosshair(crossVAO, lineProgram);
         drawHotbar(quadVAO, quadProgram, lineProgram, texGrass, texDirt, texStone);
 
+        // --- Debug overlay ---
+        if (showDebug) {
+            /*auto textWidth = [](const char* text, float scale) {
+                return (int)(strlen(text) * 8 * scale);
+            };
+            float legendY = 100 + 100 + 650; // РІСЃРµРіРґР° С‡СѓС‚СЊ РІС‹С€Рµ РіСЂР°С„РёРєР°, РІРЅРµ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚ СЂР°Р·СЂРµС€РµРЅРёСЏ
+            float legendX = 100;
+            float scale = 2.0f;
+
+            // Р¤РѕСЂРјРёСЂСѓРµРј СЃС‚СЂРѕРєРё СЃ С‚РµРєСѓС‰РёРјРё Р·РЅР°С‡РµРЅРёСЏРјРё
+            char txt1[64], txt2[64];
+            snprintf(txt1, sizeof(txt1), "FrameTime (ms): %.2f", frameTime * 1000.0);
+            snprintf(txt2, sizeof(txt2), "FPS: %.1f", fps);
+
+            // Р РёСЃСѓРµРј РєР°Р¶РґСѓСЋ РјРµС‚РєСѓ СЃ С†РІРµС‚РѕРј Рё Р·РЅР°С‡РµРЅРёРµРј
+            drawTextGL(textProg, fontTex, w, h, legendX, legendY, txt1, scale, 1.0f, 0.8f, 0.2f);
+            legendX += textWidth(txt1, scale) + 32;
+            drawTextGL(textProg, fontTex, w, h, legendX, legendY, txt2, scale, 0.2f, 1.0f, 0.2f);
+            legendX += textWidth(txt2, scale) + 32;
+            */
+           char debugText[1024];
+            snprintf(debugText, sizeof(debugText),
+                "FPS: %.1f\r\n"
+                "Pos: (%.2f, %.2f, %.2f)\r\n"
+                "Yaw: %.1f  Pitch: %.1f\r\n"
+                "block: %d\r\n"
+                "V-Y: %.2f  OnGr: %d\r\n"
+                "Players: %d\r\n"
+                "Pick: %s\r\n",
+                fps,
+                cameraPos.x, cameraPos.y, cameraPos.z,
+                yaw, pitch,
+                selectedBlock,
+                velocityY, (int)onGround,
+                [](){
+                    int c=0; for(int i=0;i<MAX_PLAYERS;++i) if(players[i].active) ++c; return c;
+                }(),
+                pick.hit ? "YES" : "NO"
+            );
+            drawTextGL(textProg, fontTex, g_winWidth, g_winHeight, 1, 1, debugText, 2, 1.0f, 0.8f, 0.2f);
+        }
+        
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
-
     glDeleteVertexArrays(1, &cubeVAO);
     glDeleteBuffers(1, &cubeVBO);
     glDeleteVertexArrays(1, &quadVAO);
@@ -1066,8 +1385,9 @@ int main(int argc, char* argv[]) {
     glDeleteProgram(program);
     glDeleteProgram(quadProgram);
     glDeleteProgram(lineProgram);
+    glDeleteProgram(textProg);
 
-    // --- Завершение мультиплеера ---
+    // --- пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ---
     networkRunning = false;
     if (networkThread.joinable()) networkThread.join();
     cleanupSockets();
