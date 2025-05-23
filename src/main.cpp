@@ -162,6 +162,62 @@ static const unsigned char font8x8_basic[128][8] = {
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}    // U+007F
 };
 
+bool isBlockInFrustum(const glm::mat4& viewProjMatrix, const glm::vec3& blockPos, float blockSize) {
+    // Центр блока
+    glm::vec4 center(blockPos.x + blockSize / 2.0f, blockPos.y + blockSize / 2.0f, blockPos.z + blockSize / 2.0f, 1.0f);
+
+    // Добавляем небольшой запас (margin) к границам фруструма
+    const float margin = 0.75f; // Запас в clip space
+
+    glm::vec4 clipSpacePos = viewProjMatrix * center;
+
+    // Проверяем, находится ли центр блока в пределах видимости с учётом запаса
+    return (clipSpacePos.x >= -clipSpacePos.w - margin && clipSpacePos.x <= clipSpacePos.w + margin &&
+        clipSpacePos.y >= -clipSpacePos.w - margin && clipSpacePos.y <= clipSpacePos.w + margin &&
+        clipSpacePos.z >= -clipSpacePos.w - margin && clipSpacePos.z <= clipSpacePos.w + margin);
+}
+
+bool isFaceInFrustum(const glm::mat4& viewProjMatrix, const glm::vec3& blockPos, const glm::vec3& faceOffset, float blockSize) {
+    // Углы грани
+    glm::vec4 corners[4] = {
+        glm::vec4(blockPos.x + faceOffset.x * blockSize,
+                  blockPos.y + faceOffset.y * blockSize,
+                  blockPos.z + faceOffset.z * blockSize, 1.0f),
+        glm::vec4(blockPos.x + faceOffset.x * blockSize + (faceOffset.y == 0 ? blockSize : 0),
+                  blockPos.y + faceOffset.y * blockSize + (faceOffset.z == 0 ? blockSize : 0),
+                  blockPos.z + faceOffset.z * blockSize + (faceOffset.x == 0 ? blockSize : 0), 1.0f),
+        glm::vec4(blockPos.x + faceOffset.x * blockSize + (faceOffset.z == 0 ? blockSize : 0),
+                  blockPos.y + faceOffset.y * blockSize + (faceOffset.x == 0 ? blockSize : 0),
+                  blockPos.z + faceOffset.z * blockSize + (faceOffset.y == 0 ? blockSize : 0), 1.0f),
+        glm::vec4(blockPos.x + faceOffset.x * blockSize + blockSize,
+                  blockPos.y + faceOffset.y * blockSize + blockSize,
+                  blockPos.z + faceOffset.z * blockSize + blockSize, 1.0f)
+    };
+
+    // Проверяем каждый угол
+    bool isVisible = false;
+    for (int i = 0; i < 4; ++i) {
+        glm::vec4 clipSpacePos = viewProjMatrix * corners[i];
+
+        // Нормализуем координаты в clip space
+        if (clipSpacePos.w != 0.0f) {
+            clipSpacePos.x /= clipSpacePos.w;
+            clipSpacePos.y /= clipSpacePos.w;
+            clipSpacePos.z /= clipSpacePos.w;
+        }
+
+        // Проверяем, находится ли угол в пределах фруструма
+        if (clipSpacePos.x >= -1.0f && clipSpacePos.x <= 1.0f &&
+            clipSpacePos.y >= -1.0f && clipSpacePos.y <= 1.0f &&
+            clipSpacePos.z >= -1.0f && clipSpacePos.z <= 1.0f) {
+            isVisible = true; // Один из углов грани видим
+            break;
+        }
+    }
+
+    return isVisible;
+}
+
 const char* textVertexShader = R"(
 #version 330 core
 layout(location = 0) in vec2 inPos;
@@ -1268,45 +1324,71 @@ int main(int argc, char* argv[]) {
 
         glBindVertexArray(cubeVAO);
 
-        for (int x = 0; x < WORLD_X; ++x)
-            for (int y = 0; y < WORLD_Y; ++y)
+        glm::mat4 viewProjMatrix = g_projection * view;
+        for (int x = 0; x < WORLD_X; ++x) {
+            for (int y = 0; y < WORLD_Y; ++y) {
                 for (int z = 0; z < WORLD_Z; ++z) {
                     BlockType t = world[x][y][z].type;
                     if (t == AIR) continue;
-                    // �� ������ ���������� �����
-                    bool hidden = true;
-                    for (int dx = -1; dx <= 1 && hidden; ++dx)
-                        for (int dy = -1; dy <= 1 && hidden; ++dy)
-                            for (int dz = -1; dz <= 1 && hidden; ++dz) {
-                                if (abs(dx) + abs(dy) + abs(dz) != 1) continue;
-                                int nx = x + dx, ny = y + dy, nz = z + dz;
-                                if (nx < 0 || nx >= WORLD_X || ny < 0 || ny >= WORLD_Y || nz < 0 || nz >= WORLD_Z) { hidden = false; break; }
-                                if (world[nx][ny][nz].type == AIR) { hidden = false; break; }
-                            }
-                    if (hidden) continue;
 
-                    float ao = getBlockAO(x, y, z);
-                    float coloredCube[36 * 9];
-                    for (int i = 0; i < 36; ++i) {
-                        coloredCube[i * 9 + 0] = cubeVertices[i * 9 + 0] * BLOCK_SIZE;
-                        coloredCube[i * 9 + 1] = cubeVertices[i * 9 + 1] * BLOCK_SIZE;
-                        coloredCube[i * 9 + 2] = cubeVertices[i * 9 + 2] * BLOCK_SIZE;
-                        coloredCube[i * 9 + 3] = cubeVertices[i * 9 + 3];
-                        coloredCube[i * 9 + 4] = cubeVertices[i * 9 + 4];
-                        coloredCube[i * 9 + 5] = cubeVertices[i * 9 + 5];
-                        coloredCube[i * 9 + 6] = cubeVertices[i * 9 + 6];
-                        coloredCube[i * 9 + 7] = cubeVertices[i * 9 + 7];
-                        coloredCube[i * 9 + 8] = ao;
+                    glm::vec3 blockPos(x * BLOCK_SIZE, y * BLOCK_SIZE, z * BLOCK_SIZE);
+
+                    // Предварительная проверка на расстояние
+                    if (glm::distance(cameraPos, blockPos) > 50.0f) continue;
+
+                    // Проверка видимости всего блока
+                    if (!isBlockInFrustum(viewProjMatrix, blockPos, BLOCK_SIZE)) continue;
+
+                    // Смещения для каждой грани блока
+                    glm::vec3 faceOffsets[6] = {
+                        {0.0f, 0.0f, 1.0f},  // Передняя грань
+                        {0.0f, 0.0f, -1.0f}, // Задняя грань
+                        {-1.0f, 0.0f, 0.0f}, // Левая грань
+                        {1.0f, 0.0f, 0.0f},  // Правая грань
+                        {0.0f, 1.0f, 0.0f},  // Верхняя грань
+                        {0.0f, -1.0f, 0.0f}  // Нижняя грань
+                    };
+
+                    for (int i = 0; i < 6; ++i) {
+                        glm::vec3 offset = faceOffsets[i];
+                        int nx = x + (int)offset.x;
+                        int ny = y + (int)offset.y;
+                        int nz = z + (int)offset.z;
+                        // Проверка видимости грани
+                        if (!isFaceInFrustum(viewProjMatrix, blockPos, offset, BLOCK_SIZE)) continue;
+
+                        // Если соседний блок существует и не является AIR, грань скрыта
+                        if (nx >= 0 && nx < WORLD_X && ny >= 0 && ny < WORLD_Y && nz >= 0 && nz < WORLD_Z) {
+                            if (world[nx][ny][nz].type != AIR) continue;
+                        }
+
+                        // Рендер грани
+                        float ao = getBlockAO(x, y, z);
+                        float coloredFace[6 * 9]; // 6 вершин на грань
+                        for (int j = 0; j < 6; ++j) {
+                            int vertexIndex = i * 6 + j;
+                            coloredFace[j * 9 + 0] = cubeVertices[vertexIndex * 9 + 0] * BLOCK_SIZE;
+                            coloredFace[j * 9 + 1] = cubeVertices[vertexIndex * 9 + 1] * BLOCK_SIZE;
+                            coloredFace[j * 9 + 2] = cubeVertices[vertexIndex * 9 + 2] * BLOCK_SIZE;
+                            coloredFace[j * 9 + 3] = cubeVertices[vertexIndex * 9 + 3];
+                            coloredFace[j * 9 + 4] = cubeVertices[vertexIndex * 9 + 4];
+                            coloredFace[j * 9 + 5] = cubeVertices[vertexIndex * 9 + 5];
+                            coloredFace[j * 9 + 6] = cubeVertices[vertexIndex * 9 + 6];
+                            coloredFace[j * 9 + 7] = cubeVertices[vertexIndex * 9 + 7];
+                            coloredFace[j * 9 + 8] = ao;
+                        }
+                        glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
+                        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(coloredFace), coloredFace);
+
+                        glUniform1i(glGetUniformLocation(program, "blockType"), t);
+
+                        glm::mat4 model = glm::translate(glm::mat4(1.0f), blockPos);
+                        glUniformMatrix4fv(glGetUniformLocation(program, "model"), 1, GL_FALSE, glm::value_ptr(model));
+                        glDrawArrays(GL_TRIANGLES, 0, 6);
                     }
-                    glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
-                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(coloredCube), coloredCube);
-
-                    glUniform1i(glGetUniformLocation(program, "blockType"), t);
-
-                    glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(x * BLOCK_SIZE, y * BLOCK_SIZE, z * BLOCK_SIZE));
-                    glUniformMatrix4fv(glGetUniformLocation(program, "model"), 1, GL_FALSE, glm::value_ptr(model));
-                    glDrawArrays(GL_TRIANGLES, 0, 36);
                 }
+            }
+        }
 
         // --- ������ ������ ������� ��� �������������� ---
         glUseProgram(program);
