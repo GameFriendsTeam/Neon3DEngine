@@ -1107,7 +1107,7 @@ int main(int argc, char* argv[]) {
     setlocale(LC_ALL, "Russian");
     // --- �����������: ����� ������ ---
     initSockets();
-    printf("�������� ����� (1 - ������, 2 - ������, 3 - ����): ");
+    printf("выберите режим (1 - сервер, 2 - клиент, 3 - хост): ");
     int mode = 0;
     std::cin >> mode;
     unsigned short port;
@@ -1116,7 +1116,7 @@ int main(int argc, char* argv[]) {
         // ������ ������ (����������)
         isServer = true;
         myPlayerId = -1; // ������ �� ��������� ��� �����
-        printf("������� ���� ��� �������: ");
+        printf("Введите порт: ");
         std::cin >> port;
         for (int i = 0; i < MAX_PLAYERS; ++i) players[i].active = false;
         networkThread = std::thread(serverThreadFunc, port);
@@ -1125,9 +1125,9 @@ int main(int argc, char* argv[]) {
         // ������ ������
         isServer = false;
         myPlayerId = 0;
-        printf("������� IP �������: ");
+        printf("Введите IP сервера: ");
         std::cin >> ip;
-        printf("������� ����: ");
+        printf("Введите порт: ");
         std::cin >> port;
         for (int i = 0; i < MAX_PLAYERS; ++i) players[i].active = false;
         players[0].active = true;
@@ -1137,7 +1137,7 @@ int main(int argc, char* argv[]) {
         // ����: ������ + ������
         isServer = true;
         myPlayerId = 0;
-        printf("������� ���� ��� �����: ");
+        printf("Введие порт: ");
         std::cin >> port;
         for (int i = 0; i < MAX_PLAYERS; ++i) players[i].active = false;
         players[0].active = true;
