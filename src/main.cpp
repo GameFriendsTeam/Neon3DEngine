@@ -167,7 +167,7 @@ bool isBlockInFrustum(const glm::mat4& viewProjMatrix, const glm::vec3& blockPos
     glm::vec4 center(blockPos.x + blockSize / 2.0f, blockPos.y + blockSize / 2.0f, blockPos.z + blockSize / 2.0f, 1.0f);
 
     // Добавляем небольшой запас (margin) к границам фруструма
-    const float margin = 0.75f; // Запас в clip space
+    const float margin = 0.45f; // Запас в clip space
 
     glm::vec4 clipSpacePos = viewProjMatrix * center;
 
@@ -176,47 +176,93 @@ bool isBlockInFrustum(const glm::mat4& viewProjMatrix, const glm::vec3& blockPos
         clipSpacePos.y >= -clipSpacePos.w - margin && clipSpacePos.y <= clipSpacePos.w + margin &&
         clipSpacePos.z >= -clipSpacePos.w - margin && clipSpacePos.z <= clipSpacePos.w + margin);
 }
+struct FrustumPlane {
+    glm::vec4 plane; // (a, b, c, d): ax + by + cz + d = 0
+};
+
+void extractFrustumPlanes(const glm::mat4& m, FrustumPlane planes[6]) {
+    // Левая
+    planes[0].plane = glm::vec4(
+        m[0][3] + m[0][0],
+        m[1][3] + m[1][0],
+        m[2][3] + m[2][0],
+        m[3][3] + m[3][0]);
+    // Правая
+    planes[1].plane = glm::vec4(
+        m[0][3] - m[0][0],
+        m[1][3] - m[1][0],
+        m[2][3] - m[2][0],
+        m[3][3] - m[3][0]);
+    // Нижняя
+    planes[2].plane = glm::vec4(
+        m[0][3] + m[0][1],
+        m[1][3] + m[1][1],
+        m[2][3] + m[2][1],
+        m[3][3] + m[3][1]);
+    // Верхняя
+    planes[3].plane = glm::vec4(
+        m[0][3] - m[0][1],
+        m[1][3] - m[1][1],
+        m[2][3] - m[2][1],
+        m[3][3] - m[3][1]);
+    // Ближняя
+    planes[4].plane = glm::vec4(
+        m[0][3] + m[0][2],
+        m[1][3] + m[1][2],
+        m[2][3] + m[2][2],
+        m[3][3] + m[3][2]);
+    // Дальняя
+    planes[5].plane = glm::vec4(
+        m[0][3] - m[0][2],
+        m[1][3] - m[1][2],
+        m[2][3] - m[2][2],
+        m[3][3] - m[3][2]);
+    // Нормализация
+    for (int i = 0; i < 6; ++i) {
+        float len = glm::length(glm::vec3(planes[i].plane));
+        planes[i].plane /= len;
+    }
+}
+
+bool isAABBInFrustum(const glm::mat4& viewProjMatrix, const glm::vec3& min, const glm::vec3& max) {
+    FrustumPlane planes[6];
+    extractFrustumPlanes(viewProjMatrix, planes);
+    for (int i = 0; i < 6; ++i) {
+        // Для каждой плоскости ищем "самую дальнюю" точку AABB по направлению нормали
+        glm::vec3 p = min;
+        if (planes[i].plane.x >= 0) p.x = max.x;
+        if (planes[i].plane.y >= 0) p.y = max.y;
+        if (planes[i].plane.z >= 0) p.z = max.z;
+        // Если вся AABB по одну сторону от плоскости — вне фруструма
+        if (planes[i].plane.x * p.x + planes[i].plane.y * p.y + planes[i].plane.z * p.z + planes[i].plane.w < 0)
+            return false;
+    }
+    return true;
+}
+
 
 bool isFaceInFrustum(const glm::mat4& viewProjMatrix, const glm::vec3& blockPos, const glm::vec3& faceOffset, float blockSize) {
-    // Углы грани
-    glm::vec4 corners[4] = {
-        glm::vec4(blockPos.x + faceOffset.x * blockSize,
-                  blockPos.y + faceOffset.y * blockSize,
-                  blockPos.z + faceOffset.z * blockSize, 1.0f),
-        glm::vec4(blockPos.x + faceOffset.x * blockSize + (faceOffset.y == 0 ? blockSize : 0),
-                  blockPos.y + faceOffset.y * blockSize + (faceOffset.z == 0 ? blockSize : 0),
-                  blockPos.z + faceOffset.z * blockSize + (faceOffset.x == 0 ? blockSize : 0), 1.0f),
-        glm::vec4(blockPos.x + faceOffset.x * blockSize + (faceOffset.z == 0 ? blockSize : 0),
-                  blockPos.y + faceOffset.y * blockSize + (faceOffset.x == 0 ? blockSize : 0),
-                  blockPos.z + faceOffset.z * blockSize + (faceOffset.y == 0 ? blockSize : 0), 1.0f),
-        glm::vec4(blockPos.x + faceOffset.x * blockSize + blockSize,
-                  blockPos.y + faceOffset.y * blockSize + blockSize,
-                  blockPos.z + faceOffset.z * blockSize + blockSize, 1.0f)
-    };
+    glm::vec3 min = blockPos;
+    glm::vec3 max = blockPos + glm::vec3(blockSize);
 
-    // Проверяем каждый угол
-    bool isVisible = false;
-    for (int i = 0; i < 4; ++i) {
-        glm::vec4 clipSpacePos = viewProjMatrix * corners[i];
-
-        // Нормализуем координаты в clip space
-        if (clipSpacePos.w != 0.0f) {
-            clipSpacePos.x /= clipSpacePos.w;
-            clipSpacePos.y /= clipSpacePos.w;
-            clipSpacePos.z /= clipSpacePos.w;
-        }
-
-        // Проверяем, находится ли угол в пределах фруструма
-        if (clipSpacePos.x >= -1.0f && clipSpacePos.x <= 1.0f &&
-            clipSpacePos.y >= -1.0f && clipSpacePos.y <= 1.0f &&
-            clipSpacePos.z >= -1.0f && clipSpacePos.z <= 1.0f) {
-            isVisible = true; // Один из углов грани видим
-            break;
-        }
+    // Для каждой грани определяем её AABB (это плоскость толщиной 0, но для надёжности можно добавить небольшой offset)
+    glm::vec3 fmin = min, fmax = max;
+    const float eps = 0.001f;
+    if (faceOffset.x != 0) {
+        fmin.x = fmax.x = (faceOffset.x > 0) ? max.x : min.x;
+        fmin.x -= eps; fmax.x += eps;
     }
-
-    return isVisible;
+    else if (faceOffset.y != 0) {
+        fmin.y = fmax.y = (faceOffset.y > 0) ? max.y : min.y;
+        fmin.y -= eps; fmax.y += eps;
+    }
+    else if (faceOffset.z != 0) {
+        fmin.z = fmax.z = (faceOffset.z > 0) ? max.z : min.z;
+        fmin.z -= eps; fmax.z += eps;
+    }
+    return isAABBInFrustum(viewProjMatrix, fmin, fmax);
 }
+
 
 const char* textVertexShader = R"(
 #version 330 core
@@ -1325,6 +1371,11 @@ int main(int argc, char* argv[]) {
         glBindVertexArray(cubeVAO);
 
         glm::mat4 viewProjMatrix = g_projection * view;
+        // --- Сборка всех видимых граней в один буфер ---
+        std::vector<float> allFaces;
+        std::vector<int> allTypes;
+        std::vector<glm::mat4> allModels;
+
         for (int x = 0; x < WORLD_X; ++x) {
             for (int y = 0; y < WORLD_Y; ++y) {
                 for (int z = 0; z < WORLD_Z; ++z) {
@@ -1333,20 +1384,16 @@ int main(int argc, char* argv[]) {
 
                     glm::vec3 blockPos(x * BLOCK_SIZE, y * BLOCK_SIZE, z * BLOCK_SIZE);
 
-                    // Предварительная проверка на расстояние
-                    if (glm::distance(cameraPos, blockPos) > 50.0f) continue;
-
-                    // Проверка видимости всего блока
+                    if (glm::distance(cameraPos, blockPos) > 25.0f) continue;
                     if (!isBlockInFrustum(viewProjMatrix, blockPos, BLOCK_SIZE)) continue;
 
-                    // Смещения для каждой грани блока
                     glm::vec3 faceOffsets[6] = {
-                        {0.0f, 0.0f, 1.0f},  // Передняя грань
-                        {0.0f, 0.0f, -1.0f}, // Задняя грань
-                        {-1.0f, 0.0f, 0.0f}, // Левая грань
-                        {1.0f, 0.0f, 0.0f},  // Правая грань
-                        {0.0f, 1.0f, 0.0f},  // Верхняя грань
-                        {0.0f, -1.0f, 0.0f}  // Нижняя грань
+                        {0.0f, 0.0f, 1.0f},
+                        {0.0f, 0.0f, -1.0f},
+                        {-1.0f, 0.0f, 0.0f},
+                        {1.0f, 0.0f, 0.0f},
+                        {0.0f, 1.0f, 0.0f},
+                        {0.0f, -1.0f, 0.0f}
                     };
 
                     for (int i = 0; i < 6; ++i) {
@@ -1354,17 +1401,13 @@ int main(int argc, char* argv[]) {
                         int nx = x + (int)offset.x;
                         int ny = y + (int)offset.y;
                         int nz = z + (int)offset.z;
-                        // Проверка видимости грани
                         if (!isFaceInFrustum(viewProjMatrix, blockPos, offset, BLOCK_SIZE)) continue;
-
-                        // Если соседний блок существует и не является AIR, грань скрыта
                         if (nx >= 0 && nx < WORLD_X && ny >= 0 && ny < WORLD_Y && nz >= 0 && nz < WORLD_Z) {
                             if (world[nx][ny][nz].type != AIR) continue;
                         }
 
-                        // Рендер грани
                         float ao = getBlockAO(x, y, z);
-                        float coloredFace[6 * 9]; // 6 вершин на грань
+                        float coloredFace[6 * 9];
                         for (int j = 0; j < 6; ++j) {
                             int vertexIndex = i * 6 + j;
                             coloredFace[j * 9 + 0] = cubeVertices[vertexIndex * 9 + 0] * BLOCK_SIZE;
@@ -1381,7 +1424,6 @@ int main(int argc, char* argv[]) {
                         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(coloredFace), coloredFace);
 
                         glUniform1i(glGetUniformLocation(program, "blockType"), t);
-
                         glm::mat4 model = glm::translate(glm::mat4(1.0f), blockPos);
                         glUniformMatrix4fv(glGetUniformLocation(program, "model"), 1, GL_FALSE, glm::value_ptr(model));
                         glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -1389,6 +1431,19 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+
+
+        // --- Отправка всех граней одним вызовом ---
+        if (!allFaces.empty()) {
+            glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
+            glBufferData(GL_ARRAY_BUFFER, allFaces.size() * sizeof(float), allFaces.data(), GL_DYNAMIC_DRAW);
+            for (size_t i = 0; i < allTypes.size(); ++i) {
+                glUniform1i(glGetUniformLocation(program, "blockType"), allTypes[i]);
+                glUniformMatrix4fv(glGetUniformLocation(program, "model"), 1, GL_FALSE, glm::value_ptr(allModels[i]));
+                glDrawArrays(GL_TRIANGLES, i * 6, 6);
+            }
+        }
+
 
         // --- ������ ������ ������� ��� �������������� ---
         glUseProgram(program);
